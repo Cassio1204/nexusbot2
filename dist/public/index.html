@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Bot</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.10.0/dist/web3.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Nexus Bot</h1>
+        
+        <div class="form-group">
+            <label for="rpcUrl">RPC URL:</label>
+            <input type="text" 
+                   id="rpcUrl" 
+                   value="https://rpc.nexus.xyz/http"
+                   placeholder="Digite a URL do RPC"
+                   title="URL do RPC para conexão">
+        </div>
+
+        <div class="main-wallet-section">
+            <h2>Carteira Principal</h2>
+            <div class="form-group">
+                <label for="mainPrivateKey">Private Key da Carteira Principal:</label>
+                <input type="password" 
+                       id="mainPrivateKey" 
+                       placeholder="Ex: fc61c7fc1b3f282958605edfb106c4184c1f686923bbf6000c90fc64a5840e68"
+                       pattern="[a-fA-F0-9]{64}"
+                       title="Private key em formato hexadecimal (64 caracteres)">
+                <small class="input-help"></small>
+            </div>
+            <div class="form-group">
+                <label for="mainWalletDisplay">Endereço da Carteira Principal:</label>
+                <input type="text" 
+                       id="mainWalletDisplay" 
+                       placeholder="0x0000000000000000000000000000000000000000"
+                       title="Endereço da carteira no formato 0x..."
+                       pattern="^0x[a-fA-F0-9]{40}$">
+                <small class="input-help">Formato: Endereço ETH começando com 0x (42 caracteres)</small>
+            </div>
+            <div class="wallet-info">
+                <strong>Saldo NEXUS:</strong> <span id="mainWalletBalance">-</span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="receivingAddresses">Endereços que Receberão NEXUS (um por linha):</label>
+            <textarea id="receivingAddresses" 
+                      rows="5"
+                      placeholder="Cole os endereços que receberão os tokens NEXUS, um por linha"
+                      title="Lista de endereços que receberão os tokens"></textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="amount">Valor em NEXUS por transação:</label>
+            <input type="number" 
+                   id="amount" 
+                   step="0.0001" 
+                   value="0.01"
+                   placeholder="0.01"
+                   title="Quantidade de NEXUS por transação">
+        </div>
+
+        <div class="form-group">
+            <label for="delay">Intervalo entre transações (ms):</label>
+            <input type="number" 
+                   id="delay" 
+                   value="5000"
+                   placeholder="5000"
+                   title="Intervalo em milissegundos entre transações">
+        </div>
+
+        <button onclick="startTransactions()" id="startButton" title="Clique para iniciar as transações">
+            Iniciar Transações
+        </button>
+        <button onclick="stopTransactions()" id="stopButton" class="stop-button" disabled title="Clique para parar as transações">
+            Parar Transações
+        </button>
+
+        <div class="status-area">
+            <h2>Status das Transações</h2>
+            <div id="status" class="status-message"></div>
+            <div id="transactions" class="transactions-list"></div>
+        </div>
+    </div>
+
+    <script>
+        let mainWallet = null;
+        const web3 = new Web3();
+
+        // Configuração da rede Nexus
+        const networkConfig = {
+            chainId: '0x189', // 393 em hexadecimal
+            chainName: 'Nexus',
+            nativeCurrency: {
+                name: 'NEXUS',
+                symbol: 'NEX',
+                decimals: 18
+            },
+            rpcUrls: ['https://rpc.nexus.xyz/http'],
+            blockExplorerUrls: ['https://explorer.nexus.xyz']
+        };
+
+        async function updateMainWalletInfo() {
+            const rpcUrl = document.getElementById('rpcUrl').value;
+            web3.setProvider(new Web3.providers.HttpProvider(rpcUrl));
+            
+            const privateKey = document.getElementById('mainPrivateKey').value;
+            const manualAddress = document.getElementById('mainWalletDisplay').value;
+
+            try {
+                if (privateKey) {
+                    const account = web3.eth.accounts.privateKeyToAccount(privateKey);
+                    mainWallet = account;
+                    document.getElementById('mainWalletDisplay').value = account.address;
+                } else if (manualAddress && web3.utils.isAddress(manualAddress)) {
+                    mainWallet = { address: manualAddress };
+                }
+
+                if (mainWallet && mainWallet.address) {
+                    const balance = await web3.eth.getBalance(mainWallet.address);
+                    document.getElementById('mainWalletBalance').textContent = 
+                        web3.utils.fromWei(balance, 'ether') + ' NEX';
+                }
+            } catch (error) {
+                updateStatus('Erro ao carregar carteira principal: ' + error.message, true);
+            }
+        }
+
+        async function startTransactions() {
+            if (!mainWallet) {
+                updateStatus('Adicione a private key da carteira principal primeiro!', true);
+                return;
+            }
+
+            const receivingAddresses = document.getElementById('receivingAddresses').value.split('\n').filter(addr => addr.trim());
+            
+            if (receivingAddresses.length === 0) {
+                updateStatus('Adicione pelo menos um endereço de destino!', true);
+                return;
+            }
+
+            const data = {
+                mainWalletKey: mainWallet.privateKey,
+                receivingAddresses,
+                amount: document.getElementById('amount').value,
+                delay: document.getElementById('delay').value,
+                rpcUrl: document.getElementById('rpcUrl').value
+            };
+
+            document.getElementById('startButton').disabled = true;
+            document.getElementById('stopButton').disabled = false;
+            
+            updateStatus('Iniciando transações...');
+            
+            try {
+                const response = await fetch('/.netlify/functions/transactions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateStatus('Transações em andamento');
+                    startTransactionPolling();
+                } else {
+                    updateStatus('Erro: ' + result.error, true);
+                    resetButtons();
+                }
+            } catch (error) {
+                updateStatus('Erro ao iniciar transações: ' + error, true);
+                resetButtons();
+            }
+        }
+
+        async function stopTransactions() {
+            try {
+                const response = await fetch('/stop-transactions', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateStatus('Parando transações...');
+                    resetButtons();
+                }
+            } catch (error) {
+                updateStatus('Erro ao parar transações: ' + error, true);
+            }
+        }
+
+        function resetButtons() {
+            document.getElementById('startButton').disabled = false;
+            document.getElementById('stopButton').disabled = true;
+        }
+
+        let lastTransactionTime = Date.now();
+        
+        async function updateTransactionLogs() {
+            try {
+                const response = await fetch('/transaction-logs');
+                const logs = await response.json();
+                
+                const transactionsDiv = document.getElementById('transactions');
+                transactionsDiv.innerHTML = ''; // limpa logs existentes
+                
+                logs.forEach(log => {
+                    if (log.type === 'status') {
+                        // Mensagem de status
+                        const div = document.createElement('div');
+                        div.className = 'status-log';
+                        div.innerHTML = `<strong>${new Date(log.time).toLocaleTimeString()}</strong>: ${log.message}`;
+                        transactionsDiv.appendChild(div);
+                    } else {
+                        // Transação normal
+                        const div = document.createElement('div');
+                        div.className = 'transaction-item';
+                        div.innerHTML = `
+                            <div><strong>${new Date(log.time).toLocaleTimeString()}</strong></div>
+                            <div>De: ${log.from.substring(0,10)}...${log.from.substring(38)}</div>
+                            <div>Para: ${log.to.substring(0,10)}...${log.to.substring(38)}</div>
+                            <div>Hash: <a href="#" onclick="window.open('https://explorer.nexus.xyz/tx/${log.hash}')">${log.hash}</a></div>
+                        `;
+                        transactionsDiv.appendChild(div);
+                    }
+                });
+            } catch (error) {
+                console.error('Erro ao atualizar logs:', error);
+            }
+        }
+
+        async function startTransactionPolling() {
+            while (document.getElementById('stopButton').disabled === false) {
+                await updateTransactionLogs();
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+
+        function updateStatus(message, isError = false) {
+            const status = document.getElementById('status');
+            status.innerHTML = message;
+            status.className = `status-message ${isError ? 'error' : 'success'}`;
+        }
+
+        function addTransactionLog(from, to, hash) {
+            const transactions = document.getElementById('transactions');
+            const div = document.createElement('div');
+            div.className = 'transaction-item';
+            div.innerHTML = `
+                <div>De: ${from.substring(0,10)}...${from.substring(38)}</div>
+                <div>Para: ${to.substring(0,10)}...${to.substring(38)}</div>
+                <div>Hash: <a href="#" onclick="window.open('https://explorer.nexus.xyz/tx/${hash}')">${hash.substring(0,10)}...</a></div>
+            `;
+            transactions.insertBefore(div, transactions.firstChild);
+        }
+
+        // Atualizar RPC quando mudar a URL
+        document.getElementById('rpcUrl').addEventListener('change', updateMainWalletInfo);
+        document.getElementById('mainPrivateKey').addEventListener('change', updateMainWalletInfo);
+        document.getElementById('mainWalletDisplay').addEventListener('change', updateMainWalletInfo);
+    </script>
+</body>
+</html>
